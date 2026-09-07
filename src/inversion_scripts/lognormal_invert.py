@@ -155,7 +155,6 @@ def lognormal_invert(config, state_vector_filepath, jacobian_sf):
         # the lognormal part of K gets scaled by prior_scale to convert to median
         K_ROI = K_temp[:, :-num_normal_elems]
         K_normal = K_temp[:, -num_normal_elems:]
-        K_ROI = prior_scale * K_ROI
         K_full = np.concatenate((K_ROI, K_normal), axis=1)
 
         m, n = np.shape(K_ROI)
@@ -247,6 +246,12 @@ def lognormal_invert(config, state_vector_filepath, jacobian_sf):
         # ln(xn) = x(n-1) + inv(term1+term2)@(term3 + term4)
         # where x(n-1) is the previous iteration of xn until convergence
         print("Status: Iterating to calculate ln(xn)")
+
+        xnmean = np.concatenate(
+            (np.exp(lnxn[:-num_normal_elems]), lnxn[-num_normal_elems:]),
+            axis=0,
+        )   
+    
         while xn_iteration_pct_diff >= convergence_threshold:
 
             # we need to transform lnxn to xn to calculate K_prime
@@ -256,7 +261,7 @@ def lognormal_invert(config, state_vector_filepath, jacobian_sf):
             )
             # K_prime is the updated jacobian using the new xn from the previous iteration
             K_prime = np.concatenate(
-                (K_ROI * xn[:-num_normal_elems].T, K_normal), axis=1
+                (prior_scale * K_ROI * xn[:-num_normal_elems].T, K_normal), axis=1
             )
 
             # commonly used term for term1 and term3
@@ -267,7 +272,7 @@ def lognormal_invert(config, state_vector_filepath, jacobian_sf):
             term2 = (1 + kappa) * invlnsa_constraint
             inv_term = np.linalg.inv(term1 + term2)
 
-            term3 = gamma_K_prime_transpose_Soinv @ (y_ybkg_diff - K_full @ xn)
+            term3 = gamma_K_prime_transpose_Soinv @ (y_ybkg_diff - K_full @ xnmean)
             term4 = invlnsa_constraint @ (lnxn - lnxa)
 
             # put it all together to calculate lnxn_update
@@ -284,28 +289,29 @@ def lognormal_invert(config, state_vector_filepath, jacobian_sf):
 
             lnxn = lnxn_update
 
-        print("Status: Done Iterating")
-        xn = np.concatenate(
-            (np.exp(lnxn[:-num_normal_elems]), lnxn[-num_normal_elems:]), axis=0
-        )
+            # Calculate averaging kernel and degrees of freedom for signal
+            K_primeT_so = gamma * np.transpose(K_prime) @ Soinv
+            # posterior error covariance matrix (uses unweighted Sa)
+            lns = np.linalg.inv(K_primeT_so @ K_prime + invlnsa)
 
-        # Calculate averaging kernel and degrees of freedom for signal
-        K_primeT_so = gamma * np.transpose(K_prime) @ Soinv
-        # posterior error covariance matrix (uses unweighted Sa)
-        lns = np.linalg.inv(K_primeT_so @ K_prime + invlnsa)
+            # Calculate posterior mean xhat
+            dlns = np.diag(lns[:-num_normal_elems, :-num_normal_elems])
+            xn = np.concatenate(
+                (np.exp(lnxn[:-num_normal_elems]), lnxn[-num_normal_elems:]), axis=0
+            )
+            xnmean = np.concatenate(
+                (
+                    xn[:-num_normal_elems]
+                    * np.expand_dims(np.exp(dlns * (0.5)) * prior_scale, axis=1),
+                    xn[-num_normal_elems:],
+                )
+            )
+
+        print("Status: Done Iterating")
+
         # Averaging kernel (uses unweighted Sa)
         G = lns @ K_primeT_so
         ak = G @ K_prime
-
-        # Calculate posterior mean xhat
-        dlns = np.diag(lns[:-num_normal_elems, :-num_normal_elems])
-        xnmean = np.concatenate(
-            (
-                xn[:-num_normal_elems]
-                * np.expand_dims(np.exp(dlns * (0.5)) * prior_scale, axis=1),
-                xn[-num_normal_elems:],
-            )
-        )
 
         # Calculate Ja diagnostic only for domain of interest (ignoring buffer and BC elements)
         # Ja diagnostic is useful for determining regurlarization parameter (gamma)
