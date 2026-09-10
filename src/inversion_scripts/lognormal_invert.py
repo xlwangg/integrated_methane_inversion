@@ -248,7 +248,7 @@ def lognormal_invert(config, state_vector_filepath, jacobian_sf):
         print("Status: Iterating to calculate ln(xn)")
 
         xnmean = np.concatenate(
-            (np.exp(lnxn[:-num_normal_elems]), lnxn[-num_normal_elems:]),
+            (np.exp(lnxn[:-num_normal_elems]) * prior_scale, lnxn[-num_normal_elems:]),
             axis=0,
         )   
     
@@ -261,7 +261,7 @@ def lognormal_invert(config, state_vector_filepath, jacobian_sf):
             )
             # K_prime is the updated jacobian using the new xn from the previous iteration
             K_prime = np.concatenate(
-                (prior_scale * K_ROI * xn[:-num_normal_elems].T, K_normal), axis=1
+                (K_ROI * xnmean[:-num_normal_elems].T, K_normal), axis=1
             )
 
             # commonly used term for term1 and term3
